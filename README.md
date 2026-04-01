@@ -1,4 +1,4 @@
-# Zephyr BSP Copilot
+# Zephyr BSP Starter Kit
 
 A Claude Code starter kit for engineers bringing up new Microchip MCUs on Zephyr RTOS.
 
