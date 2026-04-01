@@ -58,37 +58,43 @@ Does the chip have DFP headers (module_registers_t types)?
 
 For PIC32CM JH: DFP headers → new drivers required for all peripherals.
 
-## SERCOM Generations — Not All SERCOMs Are Equal
+## Peripheral Generations — Never Assume Register Compatibility
 
-Different Microchip chip families have different SERCOM generations. The DFP type names are the same (`sercom_registers_t`, `sercom_i2cm_registers_t`), but the struct contents differ:
+Microchip reuses peripheral names (SERCOM, MCLK, PORT, NVMCTRL) across chip families, but the register layouts evolve between generations. **Same peripheral name does NOT mean same registers.**
 
-| Feature | PIC32CM (SERCOM G1) | PIC32CZ CA80/CA90 |
-|---------|--------------------|--------------------|
-| DATA register | 8-bit (`uint8_t`) | **32-bit** (`uint32_t`) |
-| CTRLC register | not present | **DATA32B, FIFOEN, thresholds** |
-| FIFO | none | **16-byte TX/RX FIFO** |
-| CTRLA.FILTSEL | not present | **10ns/50ns input filter** |
-| CTRLA.SLEWRATE | not present | **SM/FM/FMP/HS slew control** |
-| CTRLA.SPEED | not present | **SM/FMP/HS mode select** |
-| CTRLB.FIFOCLR | not present | **TX/RX FIFO clear** |
-| Max I2C speed | 400 kHz | **3.4 MHz (HS mode)** |
-| INTFLAG extras | none | **TXFE, RXFF (FIFO flags)** |
-| Instances | typically 6 | **10 (sercom0–sercom9)** |
+### How to Check Before Writing a Driver
 
-**When writing a driver for PIC32CZ:**
-- Cast DATA reads to `uint8_t` (only low byte valid in byte mode)
-- Explicitly zero CTRLC to disable FIFO and DATA32B
-- Set FILTSEL for noise rejection (50ns recommended)
-- Set SLEWRATE to match the bus speed
-- Set CTRLA.SPEED for Fast Mode Plus (required — won't work without it)
-- The FIFO is optional — polled byte-at-a-time works fine, FIFO+DMA is a future enhancement
+Before writing or porting any driver, run this checklist against the DFP headers for your specific chip (found in `modules/hal/microchip/packs/<family>/include/component/`):
 
-**When writing a driver for PIC32CM:**
-- DATA is 8-bit, no cast needed
-- No CTRLC, no FIFO, no FILTSEL, no SLEWRATE
-- Max speed is Fast Mode (400 kHz)
+1. **Open the component header** (e.g., `sercom.h`) and find the register struct (e.g., `sercom_i2cm_registers_t`). List every field — its type, offset, and name.
+2. **Compare field-by-field** against any reference driver you're adapting from. Look for:
+   - **Different register widths** (e.g., DATA is `uint8_t` on one chip, `uint32_t` on another)
+   - **Extra registers** (e.g., CTRLC, FIFOSPACE, LENGTH — not present on older parts)
+   - **Extra bitfields in existing registers** (e.g., CTRLA gaining FILTSEL, SLEWRATE, SPEED fields)
+   - **Missing registers** (older chips may lack features newer drivers assume)
+3. **For every extra register/field you find:**
+   - Decide whether it needs explicit initialization (even if you're not using the feature)
+   - Check the reset default — is it safe, or could a bootloader have configured it?
+   - Add a comment in your driver explaining why you set (or don't set) it
+4. **For every field width change:**
+   - A 32-bit DATA register still works for 8-bit I2C, but you must cast reads to `uint8_t`
+   - Check if there's a mode control (e.g., CTRLC.DATA32B) that selects byte vs word mode
 
-**Key insight:** A driver written for PIC32CM will NOT work on PIC32CZ without modifications (32-bit DATA, missing CTRLC/FILTSEL/SLEWRATE init). A driver written for PIC32CZ with proper CTRLC=0 and byte-mode DATA will be more portable.
+### Example: SERCOM Across Generations
+
+This is a real example of what you'll find when you compare headers:
+
+| What to check | Older generation | Newer generation |
+|---------------|-----------------|------------------|
+| DATA width | 8-bit | 32-bit → cast reads, check for DATA32B mode bit |
+| Extra control reg | No CTRLC | CTRLC exists → zero it to disable FIFO/32-bit mode |
+| FIFO support | None | 16-byte FIFO → explicitly disable if not using |
+| Input filter | Not available | FILTSEL field → set for noise rejection |
+| Slew rate | Not available | SLEWRATE field → set to match bus speed |
+| Speed mode | Implicit | SPEED field → must set for FM+ or HS |
+| Extra IRQ flags | MB, SB only | TXFE, RXFF → don't assume flag register width |
+
+**The principle:** Don't start from a reference driver and assume it works. Start from the DFP header for YOUR chip, list what's there, and build the driver to match. Anything in the header that you don't explicitly handle is a potential bug on hardware.
 
 ## SERCOM G1 Driver Template
 
