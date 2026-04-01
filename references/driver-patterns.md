@@ -302,6 +302,38 @@ while (!(i2cm->SERCOM_INTFLAG & flag)) {
 
 Use 10ms (10000us), not 100ms. At 100ms, an `i2c scan` across 112 addresses takes 11+ seconds when no devices respond. 10ms is more than enough for any I2C transaction at Standard Mode and above.
 
+### I2C-Specific: FILTSEL (Input Filter Selection)
+
+If your chip's SERCOM has a FILTSEL field in CTRLA, set it during configuration. This controls the input filter on the SDA/SCL lines for noise rejection. Without it, fast-edge signals on long traces or noisy boards can cause spurious start/stop conditions.
+
+```c
+/* In the CTRLA setup, before enabling: */
+ctrla |= SERCOM_I2CM_CTRLA_FILTSEL_FILTER1;  /* or FILTER2, FILTER3 */
+```
+
+Check your DFP header for available filter values — they vary by chip. If the field doesn't exist in the header, the chip doesn't support it and you can skip this.
+
+### I2C-Specific: Implement All API Callbacks
+
+Zephyr's `i2c_driver_api` struct includes `configure`, `transfer`, and `get_config`. Implement all of them — `i2c_get_config` is trivial but its absence causes runtime failures when upper layers query the bus speed:
+
+```c
+static int i2c_mchp_sercom_get_config(const struct device *dev, uint32_t *dev_config)
+{
+    struct i2c_mchp_sercom_data *data = dev->data;
+    *dev_config = data->dev_config;
+    return 0;
+}
+
+static DEVICE_API(i2c, i2c_mchp_sercom_api) = {
+    .configure = i2c_mchp_sercom_configure,
+    .transfer = i2c_mchp_sercom_transfer,
+    .get_config = i2c_mchp_sercom_get_config,
+};
+```
+
+Store `dev_config` in your driver data struct during `configure()` so `get_config()` can return it.
+
 ### I2C-Specific: Use LOG_DBG in Init
 
 Use `LOG_DBG` (not `LOG_INF`) for init success messages. `LOG_INF` during driver init creates noise on the console and Zephyr maintainers will flag it.

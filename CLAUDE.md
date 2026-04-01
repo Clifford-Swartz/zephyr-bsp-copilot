@@ -192,3 +192,5 @@ PR 3: drivers: microchip: add I2C/SPI/WDT support for SERCOM G1
 10. **Use `WAIT_FOR()` macro** from `<zephyr/sys/util.h>` for polling loops. It's the Zephyr-idiomatic way and reads cleaner than hand-rolled timeout loops.
 11. **Use `LOG_DBG` (not `LOG_INF`) in driver init.** Upstream maintainers reject noisy init logging.
 12. **Smart mode or manual ACK — pick one.** If CTRLB.SMEN=1, reading DATA auto-sends ACK. Don't also write CMD_READ_ACK or you risk double-triggering.
+13. **Implement all API callbacks** for the subsystem. Check the Zephyr `_driver_api` struct (e.g., `i2c_driver_api`) and implement every function pointer — even trivial ones like `get_config`. Missing callbacks cause runtime failures that are hard to debug.
+14. **Set FILTSEL if your chip has it.** Check the DFP header for an input filter field in CTRLA. Noise rejection on SDA/SCL prevents spurious start/stop conditions on real hardware.
