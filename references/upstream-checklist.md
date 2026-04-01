@@ -30,6 +30,8 @@ Use this checklist before submitting a PR to `zephyrproject-rtos/zephyr`. Every 
 
 ### C Source
 - [ ] **Linux kernel style** (8-char tabs, snake_case identifiers)
+- [ ] **`#define DT_DRV_COMPAT` before any `#include`** — Zephyr convention, common review nit
+- [ ] **Don't `#include` headers that don't exist yet** — if a dependency (e.g., clock driver) hasn't been written, note it as a TODO comment rather than including a nonexistent header
 - [ ] **No dynamic allocation** in drivers
 - [ ] **Inclusive terminology** (no master/slave — use controller/target, host/device)
 - [ ] Passes `checkpatch` and `clang-format`
