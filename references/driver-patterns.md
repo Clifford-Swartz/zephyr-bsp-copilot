@@ -58,6 +58,38 @@ Does the chip have DFP headers (module_registers_t types)?
 
 For PIC32CM JH: DFP headers → new drivers required for all peripherals.
 
+## SERCOM Generations — Not All SERCOMs Are Equal
+
+Different Microchip chip families have different SERCOM generations. The DFP type names are the same (`sercom_registers_t`, `sercom_i2cm_registers_t`), but the struct contents differ:
+
+| Feature | PIC32CM (SERCOM G1) | PIC32CZ CA80/CA90 |
+|---------|--------------------|--------------------|
+| DATA register | 8-bit (`uint8_t`) | **32-bit** (`uint32_t`) |
+| CTRLC register | not present | **DATA32B, FIFOEN, thresholds** |
+| FIFO | none | **16-byte TX/RX FIFO** |
+| CTRLA.FILTSEL | not present | **10ns/50ns input filter** |
+| CTRLA.SLEWRATE | not present | **SM/FM/FMP/HS slew control** |
+| CTRLA.SPEED | not present | **SM/FMP/HS mode select** |
+| CTRLB.FIFOCLR | not present | **TX/RX FIFO clear** |
+| Max I2C speed | 400 kHz | **3.4 MHz (HS mode)** |
+| INTFLAG extras | none | **TXFE, RXFF (FIFO flags)** |
+| Instances | typically 6 | **10 (sercom0–sercom9)** |
+
+**When writing a driver for PIC32CZ:**
+- Cast DATA reads to `uint8_t` (only low byte valid in byte mode)
+- Explicitly zero CTRLC to disable FIFO and DATA32B
+- Set FILTSEL for noise rejection (50ns recommended)
+- Set SLEWRATE to match the bus speed
+- Set CTRLA.SPEED for Fast Mode Plus (required — won't work without it)
+- The FIFO is optional — polled byte-at-a-time works fine, FIFO+DMA is a future enhancement
+
+**When writing a driver for PIC32CM:**
+- DATA is 8-bit, no cast needed
+- No CTRLC, no FIFO, no FILTSEL, no SLEWRATE
+- Max speed is Fast Mode (400 kHz)
+
+**Key insight:** A driver written for PIC32CM will NOT work on PIC32CZ without modifications (32-bit DATA, missing CTRLC/FILTSEL/SLEWRATE init). A driver written for PIC32CZ with proper CTRLC=0 and byte-mode DATA will be more portable.
+
 ## SERCOM G1 Driver Template
 
 SERCOM is a multi-protocol peripheral (UART/I2C/SPI). Each mode has its own register overlay within the same `sercom_registers_t` union.
@@ -166,6 +198,107 @@ After writing the address byte, wait for **both** MB and SB flags:
 ret = wait_bus_flag(i2cm, SERCOM_I2CM_INTFLAG_MB_Msk | SERCOM_I2CM_INTFLAG_SB_Msk);
 ```
 MB fires for write-mode address ACK; SB fires for read-mode. Waiting for either avoids a subtle bug where the wrong flag is checked.
+
+### I2C-Specific: CTRLB Write Hazard
+
+**Critical:** CTRLB.CMD is a write-only action field (bits 17:16). When you do `|=` on CTRLB, the CPU reads the register first — but CMD always reads back as 0, not the last value written. This means `|=` is *safe* for CMD (you won't accidentally re-trigger a command), but you **must not** assume the read-back value of CMD reflects the current state.
+
+The safer pattern is to build CTRLB from scratch each time:
+```c
+/* CORRECT: build the full value, don't read-modify-write */
+uint32_t ctrlb = SERCOM_I2CM_CTRLB_SMEN_Msk;  /* preserve smart mode */
+ctrlb |= SERCOM_I2CM_CTRLB_ACKACT_Msk;         /* NACK */
+ctrlb |= SERCOM_I2CM_CTRLB_CMD(CMD_STOP);       /* issue STOP */
+i2cm->SERCOM_CTRLB = ctrlb;
+wait_sync(i2cm);
+
+/* RISKY: |= re-reads CTRLB, CMD reads as 0, ACKACT may have stale state */
+i2cm->SERCOM_CTRLB |= SERCOM_I2CM_CTRLB_ACKACT_Msk;
+```
+
+### I2C-Specific: Smart Mode vs Manual ACK
+
+SERCOM I2C master has two ACK approaches — pick ONE, not both:
+
+1. **Smart mode (SMEN=1):** Reading DATA automatically sends ACK and clocks the next byte. You only need to set ACKACT=NACK before reading the *last* byte. Simpler code, fewer bus transactions.
+
+2. **Manual mode (SMEN=0):** After reading DATA, you must explicitly write CMD=READ_ACK to CTRLB to send ACK and clock the next byte. More control but more code.
+
+If you enable smart mode AND write manual ACK commands, you risk double-triggering (auto-ACK from the read, then another ACK from your CMD write). The symptom is reading garbage or skipping bytes.
+
+**Recommendation:** Use smart mode (SMEN=1) and only set ACKACT for the last byte. Do NOT also write CMD_READ_ACK.
+
+### I2C-Specific: Read Sequence with Smart Mode
+
+With smart mode enabled, the correct read loop is:
+```c
+for (uint32_t i = 0; i < msg->len; i++) {
+    if (i == msg->len - 1) {
+        /* Before reading last byte, set NACK so smart mode sends NACK */
+        uint32_t ctrlb = SERCOM_I2CM_CTRLB_SMEN_Msk |
+                          SERCOM_I2CM_CTRLB_ACKACT_Msk;
+        if (msg->flags & I2C_MSG_STOP) {
+            ctrlb |= SERCOM_I2CM_CTRLB_CMD(CMD_STOP);
+        }
+        i2cm->SERCOM_CTRLB = ctrlb;
+        wait_sync(i2cm);
+    }
+
+    /* Reading DATA clears SB flag; smart mode auto-ACKs (or NACKs if last) */
+    msg->buf[i] = (uint8_t)i2cm->SERCOM_DATA;
+
+    if (i < msg->len - 1) {
+        /* Wait for next byte to arrive */
+        ret = wait_bus_flag(i2cm, SERCOM_I2CM_INTFLAG_SB_Msk);
+        if (ret) {
+            send_stop(i2cm);
+            return ret;
+        }
+    }
+}
+```
+
+### I2C-Specific: Baud Rate Calculation
+
+The simplified formula `BAUD = fGCLK / (2 * fSCL) - 1` works for Standard Mode but becomes inaccurate at higher speeds. The datasheet formula accounts for the 10-cycle fixed overhead:
+
+```c
+/* Accurate formula per datasheet: fSCL = fGCLK / (10 + 2*BAUD) */
+/* Solving for BAUD: BAUD = (fGCLK - 10*fSCL) / (2*fSCL) */
+#define I2C_BAUD(fgclk, fscl) \
+    MIN(((fgclk) - 10U * (fscl)) / (2U * (fscl)), 255U)
+```
+
+At 48 MHz / 400 kHz: simplified gives 59, accurate gives 55. At 1 MHz the error grows larger. Always use the datasheet formula.
+
+### I2C-Specific: Use WAIT_FOR Macro
+
+Zephyr provides `WAIT_FOR()` in `<zephyr/sys/util.h>` for polling loops. Use it instead of hand-rolled timeout loops:
+```c
+#include <zephyr/sys/util.h>
+
+/* Zephyr idiomatic polling */
+bool ready = WAIT_FOR(i2cm->SERCOM_INTFLAG & flag,
+                      I2C_TIMEOUT_US, k_busy_wait(1));
+if (!ready) {
+    return -ETIMEDOUT;
+}
+
+/* Instead of hand-rolled: */
+uint32_t timeout = I2C_TIMEOUT_US;
+while (!(i2cm->SERCOM_INTFLAG & flag)) {
+    if (--timeout == 0) return -ETIMEDOUT;
+    k_busy_wait(1);
+}
+```
+
+### I2C-Specific: Timeout Value
+
+Use 10ms (10000us), not 100ms. At 100ms, an `i2c scan` across 112 addresses takes 11+ seconds when no devices respond. 10ms is more than enough for any I2C transaction at Standard Mode and above.
+
+### I2C-Specific: Use LOG_DBG in Init
+
+Use `LOG_DBG` (not `LOG_INF`) for init success messages. `LOG_INF` during driver init creates noise on the console and Zephyr maintainers will flag it.
 
 ### SPI-Specific: DOPO/DIPO Pin Mapping
 

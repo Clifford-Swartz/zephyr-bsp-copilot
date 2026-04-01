@@ -184,3 +184,9 @@ PR 3: drivers: microchip: add I2C/SPI/WDT support for SERCOM G1
 4. **Check existing drivers before writing new ones.** Sometimes the existing driver just needs a new compatible string, not a rewrite.
 5. **DFP headers vs ASF headers** is the #1 compatibility question for Microchip chips. DFP uses `module_registers_t` types. ASF uses `Module` typedefs with bitfield unions. They are NOT interchangeable.
 6. **The ATDF file is ground truth** for peripheral addresses, IRQ numbers, and pin functions. Don't hardcode what you can extract.
+7. **Read the actual DFP component headers** before writing any driver. Different SERCOM generations have different register layouts — PIC32CZ has FIFO, 32-bit DATA, FILTSEL, SLEWRATE that PIC32CM doesn't. See `references/driver-patterns.md` for the full comparison.
+8. **CTRLB.CMD is a write-only action field.** Never use `|=` on CTRLB assuming CMD retains its value — build the register value from scratch each time. See `references/driver-patterns.md` for the safe pattern.
+9. **Use the datasheet baud formula**, not the simplified version. `BAUD = (fGCLK - 10*fSCL) / (2*fSCL)` accounts for the 10-cycle overhead. The simplified `fGCLK/(2*fSCL)-1` becomes inaccurate at Fast Mode Plus speeds.
+10. **Use `WAIT_FOR()` macro** from `<zephyr/sys/util.h>` for polling loops. It's the Zephyr-idiomatic way and reads cleaner than hand-rolled timeout loops.
+11. **Use `LOG_DBG` (not `LOG_INF`) in driver init.** Upstream maintainers reject noisy init logging.
+12. **Smart mode or manual ACK — pick one.** If CTRLB.SMEN=1, reading DATA auto-sends ACK. Don't also write CMD_READ_ACK or you risk double-triggering.
