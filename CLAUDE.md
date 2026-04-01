@@ -12,18 +12,20 @@ The engineer provides a target chip and board. You walk them through each phase,
 
 Before writing any code, gather intelligence. **Start by asking the engineer for their Zephyr workspace path** (the directory where they ran `west init` / `west update`). All file searches in this phase MUST be scoped to that workspace directory. Do NOT search the user's home directory, Desktop, or other locations — other projects on the machine are not your source material and will contaminate your output.
 
-1. **Find the ATDF file** — search the Zephyr HAL module at `<workspace>/modules/hal/microchip/packs/` or the CMSIS pack manager cache. Parse it to extract:
+1. **Check for a soc-profile.yaml** — if the engineer has run the `zephyr-bsp-gen soc-profile` tool, a YAML file with pre-extracted SoC data (addresses, IRQs, memory map, clock IDs, pin mux) may already exist. If so, read it — it saves significant ATDF parsing time. If not, proceed to step 2.
+
+2. **Find the ATDF file** — search the Zephyr HAL module at `<workspace>/modules/hal/microchip/packs/` or the CMSIS pack manager cache. Parse it to extract:
    - CPU core, architecture (Cortex-M0+, M4F, M7, etc.)
    - Memory map (flash base/size, SRAM base/size)
    - Peripheral instances with base addresses and IRQ numbers
    - Pin multiplexing table
    - Clock oscillator modules
 
-2. **Find the DFP register headers** — in `<workspace>/modules/hal/microchip/packs/<family>/include/component/`. These define the actual register types (`sercom_registers_t`, `mclk_registers_t`, etc.). This is critical — it determines whether existing Zephyr drivers work or new ones are needed.
+3. **Find the DFP register headers** — in `<workspace>/modules/hal/microchip/packs/<family>/include/component/`. These define the actual register types (`sercom_registers_t`, `mclk_registers_t`, etc.). This is critical — it determines whether existing Zephyr drivers work or new ones are needed. **The soc-profile does NOT replace this step** — you still need the DFP headers for register-level details.
 
-3. **Check existing driver compatibility** — search `<workspace>/zephyr/drivers/` for compatible strings matching the chip's peripherals. The key question: do the existing drivers use ASF register types (`Sercom`, `SercomUsart`) or DFP register types (`sercom_registers_t`, `sercom_usart_int_registers_t`)? If the chip has DFP headers and existing drivers use ASF, **new drivers are required**.
+4. **Check existing driver compatibility** — search `<workspace>/zephyr/drivers/` for compatible strings matching the chip's peripherals. The key question: do the existing drivers use ASF register types (`Sercom`, `SercomUsart`) or DFP register types (`sercom_registers_t`, `sercom_usart_int_registers_t`)? If the chip has DFP headers and existing drivers use ASF, **new drivers are required**.
 
-4. **Get the board schematic/user guide** — use the Microchip MCP tool or web search to find which pins connect to the debugger CDC UART, LEDs, buttons, and extension headers. This is NOT optional — guessing pins wastes hours.
+5. **Get the board schematic/user guide** — use the Microchip MCP tool or web search to find which pins connect to the debugger CDC UART, LEDs, buttons, and extension headers. This is NOT optional — guessing pins wastes hours.
 
 **Ask the engineer:** "What board are you targeting? Do you have the schematic or user guide?"
 
@@ -82,10 +84,10 @@ The first peripheral to bring up after GPIO. Without console output, debugging e
 
 ## Phase 4: Peripheral Drivers
 
-With console working, add peripherals one at a time. For each:
+With console working, add peripherals one at a time. **Read the relevant playbook** from `references/` before starting each peripheral (e.g., `i2c-playbook.md` for I2C, `spi-playbook.md` for SPI). For each:
 
 1. **Check if an existing driver works** — try the `atmel,sam0-*` compatible first
-2. **If not, write a new driver** using the DFP register headers as reference
+2. **If not, write a new driver** using the DFP register headers and the peripheral playbook as reference
 3. **Create the DTS binding YAML** — include the appropriate controller YAML (i2c-controller.yaml, spi-controller.yaml, etc.)
 4. **Add Kconfig and CMakeLists entries**
 5. **Add the node to the board DTS** with pinctrl
