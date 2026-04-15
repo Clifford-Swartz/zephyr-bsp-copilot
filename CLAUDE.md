@@ -84,7 +84,7 @@ The first peripheral to bring up after GPIO. Without console output, debugging e
 
 ## Phase 4: Peripheral Drivers
 
-With console working, add peripherals one at a time. **Read the relevant playbook** from `references/` before starting each peripheral (e.g., `i2c-playbook.md` for I2C, `spi-playbook.md` for SPI). For each:
+With console working, add peripherals one at a time. **Read the relevant playbook** from `references/` before starting each peripheral (e.g., `i2c-playbook.md` for I2C, `spi-playbook.md` for SPI, `flash-playbook.md` for NVMCTRL, `timer-playbook.md` for TC/TCC). For each:
 
 1. **Check if an existing driver works** — try the `atmel,sam0-*` compatible first
 2. **If not, write a new driver** using the DFP register headers and the peripheral playbook as reference
@@ -189,10 +189,9 @@ PR 3: drivers: microchip: add I2C/SPI/WDT support for SERCOM G1
 5. **DFP headers vs ASF headers** is the #1 compatibility question for Microchip chips. DFP uses `module_registers_t` types. ASF uses `Module` typedefs with bitfield unions. They are NOT interchangeable.
 6. **The ATDF file is ground truth** for peripheral addresses, IRQ numbers, and pin functions. Don't hardcode what you can extract.
 7. **Read the actual DFP component headers for YOUR chip** before writing any driver. Microchip reuses peripheral names across generations but the register layouts change — fields get wider, new control registers appear, new bitfields show up. Open `modules/hal/microchip/packs/<family>/include/component/<peripheral>.h`, list every struct field, and compare against any reference driver. See `references/driver-patterns.md` for the checklist.
-8. **CTRLB.CMD is a write-only action field.** Never use `|=` on CTRLB assuming CMD retains its value — build the register value from scratch each time. See `references/driver-patterns.md` for the safe pattern.
-9. **Use the datasheet baud formula**, not the simplified version. `BAUD = (fGCLK - 10*fSCL) / (2*fSCL)` accounts for the 10-cycle overhead. The simplified `fGCLK/(2*fSCL)-1` becomes inaccurate at Fast Mode Plus speeds.
-10. **Use `WAIT_FOR()` macro** from `<zephyr/sys/util.h>` for polling loops. It's the Zephyr-idiomatic way and reads cleaner than hand-rolled timeout loops.
-11. **Use `LOG_DBG` (not `LOG_INF`) in driver init.** Upstream maintainers reject noisy init logging.
-12. **Smart mode or manual ACK — pick one.** If CTRLB.SMEN=1, reading DATA auto-sends ACK. Don't also write CMD_READ_ACK or you risk double-triggering.
-13. **Implement all API callbacks** for the subsystem. Check the Zephyr `_driver_api` struct (e.g., `i2c_driver_api`) and implement every function pointer — even trivial ones like `get_config`. Missing callbacks cause runtime failures that are hard to debug.
-14. **Set FILTSEL if your chip has it.** Check the DFP header for an input filter field in CTRLA. Noise rejection on SDA/SCL prevents spurious start/stop conditions on real hardware.
+8. **Use `WAIT_FOR()` macro** from `<zephyr/sys/util.h>` for all polling loops (SYNCBUSY, INTFLAG, etc.). It's Zephyr-idiomatic and prevents infinite hangs if hardware misbehaves. Use 10ms timeout.
+9. **Use `LOG_DBG` (not `LOG_INF`) in driver init.** Upstream maintainers reject noisy init logging.
+10. **Implement all API callbacks** for the subsystem. Check the Zephyr `_driver_api` struct and implement every function pointer — even trivial ones like `get_config`. Missing callbacks cause runtime failures that are hard to debug.
+11. **Use the datasheet baud formula** for the specific peripheral mode. Each SERCOM mode (UART, I2C, SPI) has a different baud calculation — see the relevant playbook. Don't use a simplified formula that ignores fixed-cycle overhead.
+12. **Zero CTRLC on newer SERCOMs.** If the DFP header has a CTRLC register, explicitly write 0 to disable FIFO and 32-bit DATA mode — a bootloader may have enabled them.
+13. **Peripheral-specific hazards live in the playbooks.** Before writing any driver, read the relevant playbook in `references/` — it covers register hazards, mode-specific gotchas, and API patterns unique to that peripheral type.

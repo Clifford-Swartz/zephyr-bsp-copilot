@@ -243,3 +243,5 @@ For detailed guidance on each peripheral type, see:
 - `references/uart-playbook.md` — TXPO/RXPO mapping, console setup, baud formula
 - `references/wdt-playbook.md` — Period encoding, window mode, early warning
 - `references/clock-playbook.md` — GCLK/MCLK architecture, init sequence, common pitfalls
+- `references/flash-playbook.md` — NVMCTRL write granularity, erase alignment, region locks, cache
+- `references/timer-playbook.md` — TC vs TCC, counter API vs PWM API, SYNCBUSY, double-buffering

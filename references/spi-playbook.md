@@ -34,6 +34,41 @@ LOG_MODULE_REGISTER(spi_mchp_sercom_g1);
 
 DIPO selects which pad is MISO (0-3). Verify against ATDF pin multiplexing table.
 
+## Sync-Busy Polling — Use `WAIT_FOR()`
+
+SERCOM registers that are synchronized across clock domains (CTRLA, CTRLB, ENABLE, SWRST) have a SYNCBUSY register. After writing these, you must wait for the sync to complete. **Use the `WAIT_FOR()` macro** from `<zephyr/sys/util.h>` instead of bare `while()` loops — it's Zephyr-idiomatic and prevents infinite hangs if hardware misbehaves.
+
+```c
+#include <zephyr/sys/util.h>
+
+/* After software reset */
+spim->SERCOM_CTRLA = SERCOM_SPIM_CTRLA_SWRST_Msk;
+if (!WAIT_FOR(!(spim->SERCOM_SYNCBUSY & SERCOM_SPIM_SYNCBUSY_SWRST_Msk),
+              10000, k_busy_wait(1))) {
+    LOG_ERR("SWRST sync timeout");
+    return -ETIMEDOUT;
+}
+
+/* After enabling peripheral */
+spim->SERCOM_CTRLA |= SERCOM_SPIM_CTRLA_ENABLE_Msk;
+if (!WAIT_FOR(!(spim->SERCOM_SYNCBUSY & SERCOM_SPIM_SYNCBUSY_ENABLE_Msk),
+              10000, k_busy_wait(1))) {
+    LOG_ERR("ENABLE sync timeout");
+    return -ETIMEDOUT;
+}
+```
+
+Use 10ms (10000 µs) as the timeout — sync operations complete in microseconds, so 10ms is generous. Apply `WAIT_FOR()` to every SYNCBUSY poll: SWRST, ENABLE, CTRLB writes.
+
+For data transfer flags (DRE, RXC, TXC), `WAIT_FOR()` is also recommended:
+```c
+if (!WAIT_FOR(spim->SERCOM_INTFLAG & SERCOM_SPIM_INTFLAG_DRE_Msk,
+              1000, k_busy_wait(1))) {
+    LOG_ERR("DRE timeout");
+    return -ETIMEDOUT;
+}
+```
+
 ## Chip Select Handling
 
 Zephyr's SPI subsystem manages chip select via GPIO by default. The SERCOM hardware CS (SS) pin is generally not used in master mode. Let the SPI framework handle `cs-gpios` from the DTS.
