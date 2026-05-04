@@ -18,7 +18,7 @@ They break when:
 - Pin assignments require board schematic knowledge
 - Clock trees differ from existing families
 
-For Microchip's newer chips (PIC32CM, PIC32CK), the DFP register headers are incompatible with existing `atmel,sam0-*` Zephyr drivers. A template can get the memory map right but produces drivers that won't compile. Claude can read the DFP headers and write working drivers.
+For Microchip's newer chips (PIC32CM, PIC32CK, and any DFP-based part), the register headers are incompatible with existing `atmel,sam0-*` Zephyr drivers. A template can get the memory map right but produces drivers that won't compile. Claude can read the DFP headers and write working drivers. The same workflow also applies to ASF-based parts (SAM D/L/C, SAM D5x/E5x) where existing drivers usually need only new compatible strings and board scaffolding.
 
 ## How to Use
 
@@ -68,13 +68,6 @@ At each step, build and test before moving on.
 - Architectural decisions (which peripherals to support, clock configuration choices)
 - Upstream review responses (maintainer questions about design choices)
 - DCO sign-off (only humans sign the Developer Certificate of Origin)
-
-## Proven Results
-
-This approach was used to bring up the **PIC32CM JH01 Curiosity Nano** on Zephyr v4.3.0:
-- GPIO, pinctrl, clock controller, UART, I2C, SPI, WDT — all hardware-verified
-- All drivers written from DFP register headers (no ASF compatibility)
-- Complete SoC + board definition ready for upstream formatting
 
 ## License
 
